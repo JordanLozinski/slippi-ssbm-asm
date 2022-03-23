@@ -8,11 +8,15 @@
 .set REG_BufferPointer, 29
 .set REG_Text, 28
 .set REG_FrameCount, 27
+# r26 is dangerous for some reason
 .set REG_LOCAL_DATA_ADDR, 25
 .set REG_CAM_GOBJ, 22
 .set REG_LOGO_JOBJ, 21
 .set REG_SLPLOGO, 19
 .set REG_LOGO_GOBJ, 18
+.set REG_LogoVels, 16
+.set FP_REG_XVEL, 4
+.set FP_REG_YVEL, 5
 
 # symbol offsets
 .set SLPLOGO_LOGO_JOBJDESC, 0x0
@@ -20,10 +24,12 @@
 .set COBJ_LINKS, 0x24
 .set LOGO_GXLINK, 9
 .set JOBJ_XSCALE_OFST, 0x2c
+.set JOBJ_YSCALE_OFST, 0x30
 .set JOBJ_XPOS_OFST, 0x38
+.set JOBJ_YPOS_OFST, 0x3c
 
   bl DATA_BLRL
-  mflr REG_LOCAL_DATA_ADDR
+  mflr REG_LOCAL_DATA_ADDR # 8065dc80
   b FBegin
 
 
@@ -36,9 +42,28 @@ DATA_BLRL:
 .set DO_STRING_SLPLOGO_SYMBOLNAME, DO_STRING_SLPLOGO_FILENAME + 12
 .float 1.48410099
 .set WIDESCREEN_XSCALE_FACTOR, DO_STRING_SLPLOGO_SYMBOLNAME + 19
+.byte 0
+.set UNUSED, WIDESCREEN_XSCALE_FACTOR + 1
 .float -1.7
-.set WIDESCREEN_XPOS_OFFSET, WIDESCREEN_XSCALE_FACTOR + 4
+.set WIDESCREEN_XPOS_OFFSET, UNUSED + 4
+.float -20
+.set LEFTWALL, WIDESCREEN_XPOS_OFFSET + 4
+.float 20
+.set RIGHTWALL, LEFTWALL + 4
+.float 20
+.set UPWALL, RIGHTWALL + 4
+.float -20
+.set DOWNWALL, UPWALL + 4
+.float 0
+.set ZERO, DOWNWALL + 4
+.float 2
+.set TWO, ZERO + 4
+.float 2
+.set XVEL, TWO + 4
+.float 2
+.set YVEL, XVEL + 4
 .align 2
+
 
 FBegin:
 
@@ -102,7 +127,7 @@ FBegin:
   lwz r3, SLPLOGO_LOGO_JOBJDESC (r3)
   lwz r3, 0x0 (r3)
   branchl r12, JObj_LoadJoint # (jobj_desc_ptr)
-  mr REG_LOGO_JOBJ,r3
+  mr REG_LOGO_JOBJ,r3 # 80c024e0
 
 # if widescreen, fix x scale
   lbz r3, isWidescreen(r13)
@@ -236,6 +261,10 @@ blrl
   branchl r12, HSD_MemAlloc
   mr  REG_BufferPointer,r3
 
+  li r3,8
+  branchl r12, HSD_MemAlloc
+  mr REG_LogoVels,r3
+
   ######################
   ## Init Frame Count ##
   ######################
@@ -275,6 +304,7 @@ blrl
 
   #Update counter
     addi REG_FrameCount,REG_FrameCount,1    #increment frame count
+    bl MoveLogo
     cmpwi REG_FrameCount,240
     blt PlaybackThink_GetDotString
   #Reset to 0
@@ -448,6 +478,60 @@ blrl
     branchl r12, MenuController_ChangeScreenMinor
 
   b PlaybackThink_Exit
+
+######################################################
+
+# 8065e2d8
+MoveLogo:
+  bl DATA_BLRL
+  mflr REG_LOCAL_DATA_ADDR # 8065dc80
+
+  # Problem: We're resetting xvel every frame, but we only want to do this once.
+  lfs FP_REG_XVEL, TWO(REG_LOCAL_DATA_ADDR)
+  lfs FP_REG_YVEL, TWO(REG_LOCAL_DATA_ADDR)
+  lfs f0, ZERO(REG_LOCAL_DATA_ADDR)
+  lfs f1, JOBJ_XPOS_OFST(REG_LOGO_JOBJ)
+  fadds f1, f1, FP_REG_XVEL # f1 = xpos
+  lfs f2, JOBJ_XSCALE_OFST(REG_LOGO_JOBJ)
+  lfs f3, TWO(REG_LOCAL_DATA_ADDR) 
+  fdivs f6, f2, f3 # f6 = xscale / 2
+  fcmpu cr1, f0, FP_REG_XVEL
+  # If xvel is positive, check if we're past the right wall
+  blt LeftWallCheck
+  fadds f6, f6, f1 # f6 = xpos + (xscale / 2)
+  lfs f7, RIGHTWALL(REG_LOCAL_DATA_ADDR)
+  ## if xpos + (xscale / 2) > rightwall
+  fcmpu cr1, f6, f7
+  ble LeftWallCheck
+  fmuls f7, f7, f3 # rightwall * 2
+  fsubs f1, f7, f6 # 2 * rightwall - (xpos + (xscale / 2))
+  stfs f1, JOBJ_XPOS_OFST(REG_LOGO_JOBJ)
+  fneg FP_REG_XVEL, FP_REG_XVEL
+  b Vertical
+  # Else if xvel is negative, check if we're past the left wall
+  LeftWallCheck:
+  fsubs f6, f1, f6 # f6 = xpos - (xscale / 2)
+  lfs f7, LEFTWALL(REG_LOCAL_DATA_ADDR)
+  ## if xpos - (xscale / 2) < leftwall
+  fcmpu cr1, f6, f7
+  bge Vertical
+  fmuls f7, f7, f3 # leftwall * 2
+  fsubs f1, f7, f6 # 2 * leftwall - (xpos + (xscale / 2))
+  stfs f1, JOBJ_XPOS_OFST(REG_LOGO_JOBJ)
+  fneg FP_REG_XVEL, FP_REG_XVEL
+  Vertical: 
+  blr
+
+  ## xpos = xpos + xvel
+  ## if xvel is positive, check if we're past the right wall
+  ## if xpos + (xscale / 2) > rightwall
+  ##   xpos = rightwall - (xpos + (xscale / 2) - rightwall)
+  ##   xvel = -xvel
+  ## else if xvel is negative, check if we're past the left wall
+  ## if xpos - (xscale / 2) < leftwall
+  ##   xpos = leftwall + (leftwall - (xpos - (xscale / 2)))
+  ##   xvel = -xvel
+
 
 ######################################################
 
