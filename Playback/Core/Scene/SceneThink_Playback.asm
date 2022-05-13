@@ -265,6 +265,10 @@ blrl
   branchl r12, HSD_MemAlloc
   mr REG_LogoVels,r3
 
+  lfs f1, TWO(REG_LOCAL_DATA_ADDR)
+  stfs f1, 0x0(REG_LogoVels)
+  stfs f1, 0x1(REG_LogoVels)
+
   ######################
   ## Init Frame Count ##
   ######################
@@ -483,14 +487,14 @@ blrl
 
 # 8065e2d8
 MoveLogo:
+  mflr r3 # 8065e304
   bl DATA_BLRL
-  mflr REG_LOCAL_DATA_ADDR # 8065dc80
+  mflr REG_LOCAL_DATA_ADDR # 8065e30c
 
-  # Problem: We're resetting xvel every frame, but we only want to do this once.
-  lfs FP_REG_XVEL, TWO(REG_LOCAL_DATA_ADDR)
-  lfs FP_REG_YVEL, TWO(REG_LOCAL_DATA_ADDR)
+  lfs FP_REG_XVEL, REG_LocalVels(0x0)
+  lfs FP_REG_YVEL, REG_LocalVels(0x1)
   lfs f0, ZERO(REG_LOCAL_DATA_ADDR)
-  lfs f1, JOBJ_XPOS_OFST(REG_LOGO_JOBJ)
+  lfs f1, JOBJ_XPOS_OFST(REG_LOGO_JOBJ) # Seems like the memory address is incorrect here
   fadds f1, f1, FP_REG_XVEL # f1 = xpos
   lfs f2, JOBJ_XSCALE_OFST(REG_LOGO_JOBJ)
   lfs f3, TWO(REG_LOCAL_DATA_ADDR) 
@@ -520,6 +524,10 @@ MoveLogo:
   stfs f1, JOBJ_XPOS_OFST(REG_LOGO_JOBJ)
   fneg FP_REG_XVEL, FP_REG_XVEL
   Vertical: 
+  ## Persist xvel and yvel
+  stfs FP_REG_XVEL, REG_LocalVels(0x0)
+  stfs FP_REG_YVEL, REG_LocalVels(0x1)
+  mtlr r3
   blr
 
   ## xpos = xpos + xvel
